@@ -3,14 +3,25 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const dbHost = process.env.DB_HOST || '127.0.0.1';
+const dialectOptions = {};
+
+// Automatically enable SSL when connecting to a remote cloud database (like Aiven)
+if (dbHost !== '127.0.0.1' && dbHost !== 'localhost') {
+  dialectOptions.ssl = {
+    rejectUnauthorized: false, // Connects securely over SSL without requiring additional CA certificate uploads
+  };
+}
+
 const sequelize = new Sequelize(
   process.env.DB_NAME || 'twms_db',
   process.env.DB_USER || 'root',
   (process.env.DB_PASSWORD || '').trim(),
   {
-    host: process.env.DB_HOST || '127.0.0.1',
+    host: dbHost,
     port: process.env.DB_PORT || 3306,
     dialect: 'mysql',
+    dialectOptions: dialectOptions,
     logging: false,
     pool: {
       max: 10,

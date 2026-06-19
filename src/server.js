@@ -11,13 +11,22 @@ const PORT = process.env.PORT || 5001;
 
 const ensureDatabaseExists = async () => {
   try {
-    console.log('Env variables loaded - HOST:', process.env.DB_HOST, 'USER:', process.env.DB_USER, 'PASS:', process.env.DB_PASSWORD);
-    const connection = await mysql.createConnection({
-      host: process.env.DB_HOST || '127.0.0.1',
+    const dbHost = process.env.DB_HOST || '127.0.0.1';
+    const connConfig = {
+      host: dbHost,
       port: process.env.DB_PORT || 3306,
       user: process.env.DB_USER || 'root',
       password: (process.env.DB_PASSWORD || '').trim(),
-    });
+    };
+
+    if (dbHost !== '127.0.0.1' && dbHost !== 'localhost') {
+      connConfig.ssl = {
+        rejectUnauthorized: false,
+      };
+    }
+
+    console.log('Env variables loaded - HOST:', dbHost, 'USER:', connConfig.user);
+    const connection = await mysql.createConnection(connConfig);
     await connection.query(`CREATE DATABASE IF NOT EXISTS \`${process.env.DB_NAME || 'twms_db'}\`;`);
     await connection.end();
     console.log('Database ensured/created successfully');

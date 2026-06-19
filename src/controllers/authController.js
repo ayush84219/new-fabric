@@ -1,22 +1,23 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import { User } from '../models/index.js';
 
 // Setup email transporter using env config
 const createTransporter = () => {
-  if (
-    process.env.SMTP_HOST &&
-    process.env.SMTP_USER &&
-    process.env.SMTP_PASS
-  ) {
+  const host = (process.env.SMTP_HOST || process.env.SMTP_SERVER || '').trim();
+  const user = (process.env.SMTP_USER || '').trim();
+  const pass = (process.env.SMTP_PASSWORD || process.env.SMTP_PASS || '').trim();
+
+  if (host && user && pass) {
     return nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
+      host: host,
       port: parseInt(process.env.SMTP_PORT) || 587,
       secure: process.env.SMTP_PORT === '465',
       auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
+        user: user,
+        pass: pass,
       },
     });
   }
@@ -54,6 +55,41 @@ const sendOtpEmail = async (email, otp, type) => {
   // Always log OTP to server console for easy dev testing
   console.log(`\n======================================\n[EMAIL OTP] To: ${email}\n[ACTION]: ${type.toUpperCase()}\n[OTP CODE]: ${otp}\n======================================\n`);
 
+  // 1. Try Resend API first if RESEND_API_KEY is defined
+  try {
+    const resendApiKey = (process.env.RESEND_API_KEY || '').trim();
+    if (resendApiKey) {
+      console.log('[Email Auth] Attempting to send email via Resend API...');
+      const resend = new Resend(resendApiKey);
+
+      let fromAddress = 'Textile Warehouse <onboarding@resend.dev>';
+      const fromStr = process.env.SMTP_FROM || '';
+      if (fromStr) {
+        const isPublicDomain = /@(gmail|yahoo|outlook|hotmail|aol|live|icloud|mail)\.com/i.test(fromStr);
+        if (!isPublicDomain) {
+          fromAddress = fromStr;
+        } else {
+          const nameMatch = fromStr.match(/"([^"]+)"/) || fromStr.match(/^([^<]+)/);
+          const senderName = nameMatch ? nameMatch[1].trim() : "Textile Warehouse";
+          fromAddress = `"${senderName}" <onboarding@resend.dev>`;
+        }
+      }
+
+      await resend.emails.send({
+        from: fromAddress,
+        to: [email],
+        subject: subject,
+        html: html,
+        text: text
+      });
+      console.log('✅ Success: OTP email sent via Resend API.');
+      return true;
+    }
+  } catch (apiError) {
+    console.error('[Email Auth] Resend API failed, trying SMTP fallback:', apiError.message);
+  }
+
+  // 2. Fallback to Nodemailer SMTP
   try {
     const transporter = createTransporter();
     if (transporter) {
@@ -64,10 +100,11 @@ const sendOtpEmail = async (email, otp, type) => {
         text,
         html,
       });
+      console.log('✅ Success: OTP email sent via Nodemailer SMTP.');
       return true;
     }
   } catch (error) {
-    console.error('Nodemailer failed to send email:', error.message);
+    console.error('[Email Auth] Nodemailer SMTP failed to send email:', error.message);
   }
   return false;
 };

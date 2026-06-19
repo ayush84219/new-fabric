@@ -342,28 +342,54 @@ export const syncOfflineData = async (req, res) => {
   }
 };
 
+const parseSheetDateToYmd = (dateStr) => {
+  if (!dateStr || dateStr === '—') return '';
+  const months = {
+    jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+    jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+  };
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    const day = parts[0].padStart(2, '0');
+    const month = months[parts[1].toLowerCase()] || '01';
+    let year = parts[2];
+    if (year.length === 2) year = '20' + year;
+    return `${year}-${month}-${day}`;
+  }
+
+  // Try fallback to standard Date parsing if possible
+  try {
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      return d.toISOString().split('T')[0];
+    }
+  } catch (e) { }
+
+  return dateStr;
+};
+
 // 5. GET DYEING DISCREPANCY REPORT
 export const getDyeingDiscrepancyReport = async (req, res) => {
   try {
     // 1. Fetch Google Sheet CSV data (Sent)
-    let sheetMap = new Map();
+    const sheetRows = [];
     try {
       const csvText = await getSheetDataCsvText();
       const rows = parseCsvTextIntoRows(csvText);
-      
+
       // Skip header row
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i];
         if (row.length < 4) continue;
         const billNo = String(row[3]).trim(); // Issue No (Bill Number)
         if (!billNo) continue;
-        
-        sheetMap.set(billNo.toLowerCase(), {
+
+        sheetRows.push({
           brand: row[0] || '—',       // Party
           fabric: row[1] || '—',      // Fabric Name
-          lotNumber: row[2] || '—',   // Lot Number
+          lotNumber: String(row[2] || '—').trim(),   // Lot Number
           billNumber: billNo,
-          date: row[4] || '—',
+          date: parseSheetDateToYmd(row[4] || '—'),
           shade: row[5] || '—',       // Shade (Color)
           sentWeight: parseFloat(row[8]) || 0.00,
           sentRolls: parseInt(row[14]) || 0
@@ -384,7 +410,9 @@ export const getDyeingDiscrepancyReport = async (req, res) => {
         [sequelize.fn('COUNT', sequelize.col('id')), 'receivedRolls'],
         [sequelize.fn('SUM', sequelize.col('weight')), 'receivedWeight'],
         [sequelize.fn('MAX', sequelize.col('batchNumber')), 'batchNumber'],
-        [sequelize.fn('MAX', sequelize.col('createdAt')), 'latestReceivedAt']
+        [sequelize.fn('MAX', sequelize.col('createdAt')), 'latestReceivedAt'],
+        [sequelize.fn('MAX', sequelize.col('location')), 'location'],
+        [sequelize.fn('GROUP_CONCAT', sequelize.col('barcodeId')), 'barcodeIds']
       ],
       group: ['billNumber', 'lotNumber', 'cmfName', 'fabricName', 'shade'],
       raw: true
@@ -413,22 +441,44 @@ export const getDyeingDiscrepancyReport = async (req, res) => {
       return normRec.includes(normSent) || normSent.includes(normRec);
     };
 
-    // 5. Merge and validate by Bill Number
+    // 5. Merge and validate by Bill Number / Lot Number combination
     const reportData = receivedSummaries.map(summary => {
       const billNo = String(summary.billNumber || '').trim();
       const lot = String(summary.lotNumber || '').trim();
+      const fabric = String(summary.fabricName || '').trim();
 
-      // Attempt lookup in Google Sheets map by Bill Number (Issue No)
-      let matchedData = sheetMap.get(billNo.toLowerCase());
-      
-      // Fallback: If not found, look up by Lot Number in Sheets map
-      if (!matchedData) {
-        for (const [key, val] of sheetMap.entries()) {
-          if (val.lotNumber && val.lotNumber.toLowerCase() === lot.toLowerCase()) {
-            matchedData = val;
-            break;
-          }
-        }
+      // Find the best match from sheetRows
+      let matchedData = null;
+
+      // Match 1: Exact bill, lot, and fabric name (case-insensitive)
+      if (billNo && lot && fabric) {
+        matchedData = sheetRows.find(row =>
+          row.billNumber.toLowerCase() === billNo.toLowerCase() &&
+          row.lotNumber.toLowerCase() === lot.toLowerCase() &&
+          row.fabric.toLowerCase() === fabric.toLowerCase()
+        );
+      }
+
+      // Match 2: Exact bill and lot (case-insensitive)
+      if (!matchedData && billNo && lot) {
+        matchedData = sheetRows.find(row =>
+          row.billNumber.toLowerCase() === billNo.toLowerCase() &&
+          row.lotNumber.toLowerCase() === lot.toLowerCase()
+        );
+      }
+
+      // Match 3: Exact lot number (case-insensitive)
+      if (!matchedData && lot) {
+        matchedData = sheetRows.find(row =>
+          row.lotNumber.toLowerCase() === lot.toLowerCase()
+        );
+      }
+
+      // Match 4: Exact bill number (case-insensitive)
+      if (!matchedData && billNo) {
+        matchedData = sheetRows.find(row =>
+          row.billNumber.toLowerCase() === billNo.toLowerCase()
+        );
       }
 
       // Local fallbacks if still not matched from sheets
@@ -439,6 +489,7 @@ export const getDyeingDiscrepancyReport = async (req, res) => {
       const sentRolls = matchedData ? matchedData.sentRolls : (iss ? parseInt(iss.totalQuantity) : (jo ? parseInt(jo.quantity) : 0));
       const sentWeight = matchedData ? matchedData.sentWeight : (iss ? parseFloat(iss.totalWeight) : 0.00);
       const sentShade = matchedData ? matchedData.shade : (jo ? jo.shade : (iss ? iss.remarks : '—')); // fallback to remarks or job order shade
+      const date = matchedData ? matchedData.date : (jo ? parseSheetDateToYmd(jo.date) : (iss ? (iss.issuedAt ? iss.issuedAt.split('T')[0] : '') : ''));
 
       // Received Values
       const recRolls = parseInt(summary.receivedRolls) || 0;
@@ -489,7 +540,10 @@ export const getDyeingDiscrepancyReport = async (req, res) => {
         rollCountAlert,
         colorMismatch,
         status,
-        latestReceivedAt: summary.latestReceivedAt
+        latestReceivedAt: summary.latestReceivedAt,
+        location: summary.location || '—',
+        date: (date && date !== '—') ? date : '',
+        barcodeIds: summary.barcodeIds || ''
       };
     });
 

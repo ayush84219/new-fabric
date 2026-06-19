@@ -322,7 +322,56 @@ export const fetchDyeingLotDetails = async (req, res) => {
       });
     }
 
-    return res.status(404).json({ success: false, message: 'Lot Number not found in database' });
+    // Helper to parse '27-Mar-26' into '2026-03-27'
+    const parseSheetDateToYmd = (dateStr) => {
+      if (!dateStr) return '';
+      const months = {
+        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+      };
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        const day = parts[0].padStart(2, '0');
+        const month = months[parts[1].toLowerCase()] || '01';
+        let year = parts[2];
+        if (year.length === 2) year = '20' + year;
+        return `${year}-${month}-${day}`;
+      }
+      return dateStr;
+    };
+
+    // Fallback: search in the main Sheet CSV (CMF sheet)
+    try {
+      const csvText = await getSheetDataCsvText();
+      const rows = parseCsvTextIntoRows(csvText);
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.length < 3) continue;
+        const sheetLot = String(row[2]).trim();
+        if (sheetLot.toLowerCase() === String(lotNumber).trim().toLowerCase()) {
+          console.log(`[Dyeing Lot Lookup] Found Lot ${lotNumber} in CMF Google Sheet CSV fallback`);
+          return res.json({
+            success: true,
+            data: {
+              cmfName: row[0] || '—',
+              fabricName: row[1] || '—',
+              group: row[1] || '—',
+              issuedShade: row[5] || '—',
+              receivedShade: row[6] || '',
+              billNumber: row[3] || '—',
+              date: parseSheetDateToYmd(row[4]),
+              receivedPerson: '',
+              authorizedPerson: '',
+              totalRolls: parseInt(row[15]) || 1
+            }
+          });
+        }
+      }
+    } catch (csvErr) {
+      console.error('Error searching lot in CSV fallback:', csvErr);
+    }
+
+    return res.status(404).json({ success: false, message: 'Lot Number not found in database or sheet' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -343,7 +392,7 @@ export const getSheetDataCsvText = async () => {
 
   try {
     console.log('[Sheets API] Fetching fresh CSV from Google Sheets...');
-    const response = await fetch('https://docs.google.com/spreadsheets/d/1JL0FgiamlWfKwcbjioHU6fihNN4MgRY3aRSBrqhff_k/export?format=csv');
+    const response = await fetch('https://docs.google.com/spreadsheets/d/1xvafKcozZqf9yeWoLil4Eaws9A0j7WDz1zpxItKfr1c/export?format=csv');
     if (!response.ok) {
       throw new Error(`Failed to fetch from Google Sheets: ${response.status}`);
     }
@@ -594,6 +643,72 @@ export const fetchSheetDataByLot = async (req, res) => {
 
 export const fetchJobOrders = async (req, res) => {
   try {
+    // 1. Sync from Google Sheets first
+    try {
+      console.log('[Job Orders Sync] Fetching CSV from Google Sheets...');
+      const csvText = await getJobOrdersCsvText();
+      const rows = parseCsvTextIntoRows(csvText);
+
+      if (rows && rows.length > 1) {
+        const headers = rows[0];
+
+        // Find column indices based on header names
+        const getColIdx = (name) => headers.indexOf(name);
+
+        const jobOrderNoIdx = getColIdx('Job Order No');
+        const lotNumberIdx = getColIdx('Lot Number');
+        const fabricIdx = getColIdx('Fabric');
+        const brandIdx = getColIdx('Brand');
+        const quantityIdx = getColIdx('Quantity');
+        const unitIdx = getColIdx('Unit');
+        const shadeIdx = getColIdx('Shade');
+        const dateIdx = getColIdx('Date');
+        const sizeIdx = getColIdx('Size');
+        const garmentTypeIdx = getColIdx('Garment Type');
+        const sectionIdx = getColIdx('Section');
+        const seasonIdx = getColIdx('Season');
+        const patternIdx = getColIdx('Pattern');
+        const styleIdx = getColIdx('Style');
+
+        const upsertPromises = [];
+
+        // Skip header row
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (row.length < 2) continue;
+
+          const lotNumber = lotNumberIdx !== -1 ? String(row[lotNumberIdx]).trim() : '';
+          if (!lotNumber) continue;
+
+          const jobOrderData = {
+            jobOrderNo: jobOrderNoIdx !== -1 ? String(row[jobOrderNoIdx]).trim() : '',
+            lotNumber: lotNumber,
+            fabric: fabricIdx !== -1 ? String(row[fabricIdx]).trim() : '',
+            brand: brandIdx !== -1 ? String(row[brandIdx]).trim() : '',
+            quantity: quantityIdx !== -1 ? parseInt(row[quantityIdx], 10) || 0 : 0,
+            unit: unitIdx !== -1 ? String(row[unitIdx]).trim() : '',
+            shade: shadeIdx !== -1 ? String(row[shadeIdx]).trim() : '',
+            date: dateIdx !== -1 ? String(row[dateIdx]).trim() : '',
+            size: sizeIdx !== -1 ? String(row[sizeIdx]).trim() : '',
+            garmentType: garmentTypeIdx !== -1 ? String(row[garmentTypeIdx]).trim() : '',
+            section: sectionIdx !== -1 ? String(row[sectionIdx]).trim() : '',
+            season: seasonIdx !== -1 ? String(row[seasonIdx]).trim() : '',
+            pattern: patternIdx !== -1 ? String(row[patternIdx]).trim() : '',
+            style: styleIdx !== -1 ? String(row[styleIdx]).trim() : ''
+          };
+
+          upsertPromises.push(JobOrder.upsert(jobOrderData));
+        }
+
+        // Run all upserts
+        await Promise.all(upsertPromises);
+        console.log(`[Job Orders Sync] Successfully synchronized ${upsertPromises.length} job orders from Google Sheets.`);
+      }
+    } catch (syncError) {
+      console.warn('[Job Orders Sync] Warning: Failed to sync from Google Sheets, serving from DB fallback:', syncError.message);
+    }
+
+    // 2. Fetch all from database
     const dbJobs = await JobOrder.findAll({
       order: [['id', 'DESC']]
     });
