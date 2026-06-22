@@ -52,6 +52,10 @@ export const producer = kafka.producer();
 export const consumer = kafka.consumer({ groupId: 'twms-group' });
 
 export const connectKafka = async () => {
+  if (process.env.ENABLE_KAFKA !== 'true') {
+    console.log('ℹ️ Kafka client is disabled. Set ENABLE_KAFKA=true in .env if you need to use Kafka.');
+    return;
+  }
   try {
     console.log(`Attempting connection to Kafka broker: ${broker}...`);
     await producer.connect();

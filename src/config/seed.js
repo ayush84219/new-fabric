@@ -3,6 +3,32 @@ import bcrypt from 'bcryptjs';
 
 export async function seedDatabase() {
   try {
+    // Make sure the required user exists and has the correct password/status
+    const hashedAyushPassword = await bcrypt.hash('Ayush123', 10);
+    const [ayushUser, created] = await User.findOrCreate({
+      where: { email: 'ay104061@gmail.com' },
+      defaults: {
+        name: 'Ayush',
+        password: hashedAyushPassword,
+        role: 'Admin',
+        department: 'Management',
+        status: 'Active',
+        avatar: 'AY',
+        isVerified: true
+      }
+    });
+
+    if (!created) {
+      ayushUser.password = hashedAyushPassword;
+      ayushUser.isVerified = true;
+      ayushUser.status = 'Active';
+      ayushUser.role = 'Admin';
+      await ayushUser.save();
+      console.log('User "ay104061@gmail.com" password and verification status ensured.');
+    } else {
+      console.log('User "ay104061@gmail.com" created successfully.');
+    }
+
     const roomCount = await Room.count();
 
     if (roomCount > 0) {
@@ -66,7 +92,6 @@ export async function seedDatabase() {
 
     // 4. Seed Users
     const hashedPassword = await bcrypt.hash('password123', 10);
-    const hashedAyushPassword = await bcrypt.hash('Ayush123', 10);
     const usersData = [
       { id: 1, name: 'Admin User', email: 'admin@textile.com', password: hashedPassword, role: 'Admin', department: 'Management', status: 'Active', avatar: 'AU', lastLogin: '2025-05-20 09:15', isVerified: true },
       { id: 2, name: 'Sara Ahmed', email: 'sara@textile.com', password: hashedPassword, role: 'Store Manager', department: 'Warehouse', status: 'Active', avatar: 'SA', lastLogin: '2025-05-20 08:30', isVerified: true },

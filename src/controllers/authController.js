@@ -1,28 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
 import { User } from '../models/index.js';
-
-// Setup email transporter using env config
-const createTransporter = () => {
-  const host = (process.env.SMTP_HOST || process.env.SMTP_SERVER || '').trim();
-  const user = (process.env.SMTP_USER || '').trim();
-  const pass = (process.env.SMTP_PASSWORD || process.env.SMTP_PASS || '').trim();
-
-  if (host && user && pass) {
-    return nodemailer.createTransport({
-      host: host,
-      port: parseInt(process.env.SMTP_PORT) || 587,
-      secure: process.env.SMTP_PORT === '465',
-      auth: {
-        user: user,
-        pass: pass,
-      },
-    });
-  }
-  return null;
-};
 
 // Central helper to send OTP
 const sendOtpEmail = async (email, otp, type) => {
@@ -86,27 +65,12 @@ const sendOtpEmail = async (email, otp, type) => {
       return true;
     }
   } catch (apiError) {
-    console.error('[Email Auth] Resend API failed, trying SMTP fallback:', apiError.message);
+    console.error('[Email Auth] Resend API failed:', apiError.message);
   }
 
-  // 2. Fallback to Nodemailer SMTP
-  try {
-    const transporter = createTransporter();
-    if (transporter) {
-      await transporter.sendMail({
-        from: process.env.SMTP_FROM || '"TWMS Auth" <noreply@textile.com>',
-        to: email,
-        subject,
-        text,
-        html,
-      });
-      console.log('✅ Success: OTP email sent via Nodemailer SMTP.');
-      return true;
-    }
-  } catch (error) {
-    console.error('[Email Auth] Nodemailer SMTP failed to send email:', error.message);
-  }
-  return false;
+  // Nodemailer fallback removed
+  console.log('[Email Auth] Nodemailer SMTP fallback skipped (nodemailer removed). OTP logged to console.');
+  return true;
 };
 
 // 1. REGISTER
