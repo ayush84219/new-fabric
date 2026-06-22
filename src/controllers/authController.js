@@ -132,7 +132,7 @@ export const register = async (req, res) => {
         await user.save();
       }
     } else {
-      // Create new unverified user
+      // Create new verified user directly
       const hashedPassword = await bcrypt.hash(password, 10);
       const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
       user = await User.create({
@@ -143,22 +143,12 @@ export const register = async (req, res) => {
         department: department || '',
         status: 'Active',
         avatar: initials || 'US',
-        isVerified: false,
+        isVerified: true,
       });
     }
 
-    // Generate and save OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-    user.otpCode = otp;
-    user.otpExpires = expires;
-    await user.save();
-
-    await sendOtpEmail(email, otp, 'register');
-
     res.json({
-      message: 'Registration initiated. OTP sent to your email.',
+      message: 'Registration successful! You can now log in.',
       email
     });
   } catch (err) {
@@ -243,19 +233,10 @@ export const login = async (req, res) => {
       return res.status(400).json({ error: 'Invalid email or password' });
     }
 
-    // Handle case where user registered but never verified
+    // Auto-verify user on login (bypassing OTP / mail)
     if (!user.isVerified) {
-      // Send register OTP
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      user.otpCode = otp;
-      user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+      user.isVerified = true;
       await user.save();
-      await sendOtpEmail(email, otp, 'register');
-      return res.status(202).json({
-        status: 'UNVERIFIED',
-        message: 'Your account is unverified. We have sent an OTP to verify your registration.',
-        email
-      });
     }
 
     // Generate JWT token immediately
